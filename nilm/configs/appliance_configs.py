@@ -234,7 +234,7 @@ REDD_APPLIANCES = [
     "refrigerator",
     "dishwasher", 
     "microwave",
-    "lighting",
+    "light",
     "washer_dryer",
 ]
 

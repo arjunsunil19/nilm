@@ -228,14 +228,14 @@ class DataPreprocessor:
             return np.zeros_like(arr)
             
         # Forward fill
+        first_valid_value = arr[valid_indices[0]]
         for i in range(len(arr)):
             if nan_mask[i]:
                 if i > 0:
                     arr[i] = arr[i - 1]
                 else:
-                    # Find first valid value
-                    first_valid = valid_indices[0] if len(valid_indices) > 0 else 0
-                    arr[i] = arr[first_valid] if first_valid < len(arr) else 0
+                    # Use first valid value for leading NaNs
+                    arr[i] = first_valid_value
                     
         return arr
     
@@ -269,12 +269,16 @@ class DataPreprocessor:
             
         if appliances is None:
             return agg_windows
+        
+        # Ensure appliances is 2D
+        if appliances.ndim == 1:
+            appliances = appliances.reshape(-1, 1)
             
         # Create target windows/points
         if output_type == "seq2point":
             # Target is middle point
             mid_offset = self.window_size // 2
-            n_appliances = appliances.shape[1] if appliances.ndim > 1 else 1
+            n_appliances = appliances.shape[1]
             targets = np.zeros((n_windows, n_appliances), dtype=np.float32)
             
             for i in range(n_windows):
@@ -282,7 +286,7 @@ class DataPreprocessor:
                 targets[i] = appliances[mid_idx]
         else:
             # Seq2Seq: target is full window
-            n_appliances = appliances.shape[1] if appliances.ndim > 1 else 1
+            n_appliances = appliances.shape[1]
             targets = np.zeros((n_windows, self.window_size, n_appliances), dtype=np.float32)
             
             for i in range(n_windows):

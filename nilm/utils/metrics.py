@@ -293,12 +293,16 @@ class NILMMetrics:
         fp = np.sum((predictions == 1) & (targets == 0))
         fn = np.sum((predictions == 0) & (targets == 1))
         
-        numerator = (tp * tn) - (fp * fn)
-        denominator = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        numerator = float((tp * tn) - (fp * fn))
         
-        if denominator == 0:
+        # Handle edge cases where one or more confusion matrix sums are zero
+        denom_product = float((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        if denom_product == 0:
+            # When all predictions or all targets are the same class,
+            # MCC is undefined. Return 0.0 by convention.
             return 0.0
-            
+        
+        denominator = np.sqrt(denom_product)
         return float(numerator / denominator)
     
     @staticmethod
