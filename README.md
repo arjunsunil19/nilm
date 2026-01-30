@@ -24,7 +24,7 @@ Based on Zhang et al., the model:
 2. **Temporal Modeling**: Bidirectional LSTM (128 units) learns "cycles" (e.g., Refrigerator compressor duration)
 3. **Attention Mechanism**: Self-Attention layer weights "switching events" more heavily than steady-state noise
 4. **Dual-Head Outputs**:
-   - **Regression Head**: Predicts Active Power (Watts) with ReLU for zero-bounded output
+   - **Regression Head**: Predicts Active Power (Watts), with zero-bounding applied during post-processing
    - **Classification Head**: Predicts Operating State (Multi-class)
 
 ### Multi-State Classification

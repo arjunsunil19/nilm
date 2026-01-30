@@ -51,6 +51,7 @@ LEARNING_RATE = 0.001
 BATCH_SIZE = 64
 EPOCHS = 100
 VALIDATION_SPLIT = 0.2
+TRAIN_SPLIT = 0.8  # Proportion of data used for training
 
 # Post-Processing Configuration
 MEDIAN_FILTER_SIZE = 3
@@ -325,7 +326,7 @@ def build_nilm_model(window_size=WINDOW_SIZE, n_channels=4, n_appliances=5):
         app_branch = layers.Dropout(DROPOUT_RATE)(app_branch)
         
         # Regression Head: Predicts Active Power (Watts)
-        # Using linear activation then clip to ensure zero-bounded output
+        # Linear activation is used, with zero-bounding applied during post-processing
         reg_output = layers.Dense(32, activation='relu',
                                   kernel_regularizer=tf.keras.regularizers.l2(1e-4))(app_branch)
         reg_output = layers.Dense(1, activation='linear', name=f'{appliance}_power')(reg_output)
@@ -524,68 +525,100 @@ def load_and_prepare_data(filepath):
     return mains_power, appliance_power, df
 
 
-def prepare_training_data(mains_power, appliance_power, normalize_targets=True):
-    """Prepare training data with feature engineering."""
+def prepare_training_data(mains_power, appliance_power):
+    """
+    Prepare training data with feature engineering.
     
-    # Feature engineering
-    feature_engineer = FeatureEngineer()
-    features = feature_engineer.transform(mains_power)
-    print(f"\nFeature shape: {features.shape}")
+    Note: To prevent data leakage, scalers are fit only on training data,
+    and class weights are computed only from the training split.
     
-    # Prepare targets
+    Args:
+        mains_power: Array of total mains power readings
+        appliance_power: Dict of appliance power arrays
+        
+    Returns:
+        X_train, X_test: Windowed input features
+        y_train, y_test: Dict of target values
+        class_weights: Dict of class weights for loss weighting
+        feature_engineer: Fitted feature transformer
+        power_scalers: Dict of power normalization factors
+    """
     n_samples = len(mains_power)
+    train_size = int(TRAIN_SPLIT * n_samples)
     
-    # Compute power scalers for each appliance (for denormalization)
+    # Split mains power first (before feature engineering)
+    mains_train = mains_power[:train_size]
+    mains_test = mains_power[train_size:]
+    
+    # Feature engineering - fit only on training data
+    feature_engineer = FeatureEngineer()
+    feature_engineer.fit(mains_train)
+    
+    # Transform both sets using scaler fit on training only
+    features_train = feature_engineer.transform(mains_train)
+    features_test = feature_engineer.transform(mains_test)
+    print(f"\nFeature shape (train): {features_train.shape}")
+    print(f"Feature shape (test): {features_test.shape}")
+    
+    # Compute power scalers from training data only (for normalization)
     power_scalers = {}
     
-    # Regression targets (power values)
-    y_power = np.zeros((n_samples, len(APPLIANCES)))
+    # Prepare regression targets
+    y_power_train = np.zeros((train_size, len(APPLIANCES)))
+    y_power_test = np.zeros((n_samples - train_size, len(APPLIANCES)))
+    
     for i, appliance in enumerate(APPLIANCES):
         power_vals = appliance_power[appliance].copy()
         power_vals = np.maximum(power_vals, 0)  # Ensure non-negative
         
-        if normalize_targets:
-            # Normalize to [0, 1] range based on max power
-            max_power = np.max(power_vals) + 1e-8
-            power_scalers[appliance] = max_power
-            y_power[:, i] = power_vals / max_power
-        else:
-            power_scalers[appliance] = 1.0
-            y_power[:, i] = power_vals
+        # Compute scaler from training data only to prevent data leakage
+        train_power = power_vals[:train_size]
+        test_power = power_vals[train_size:]
+        max_power = np.max(train_power) + 1e-8
+        power_scalers[appliance] = max_power
+        
+        # Normalize using training-derived scaler
+        y_power_train[:, i] = train_power / max_power
+        y_power_test[:, i] = test_power / max_power
     
-    # Classification targets (states)
-    y_states = {}
+    # Classification targets (states) and class weights
+    y_states_train = {}
+    y_states_test = {}
     class_weights = {}
     
     for i, appliance in enumerate(APPLIANCES):
         # Use original (non-normalized) power for state classification
-        states = power_array_to_states(appliance_power[appliance], appliance)
-        state_indices = encode_states(states, appliance)
-        y_states[appliance] = states_to_onehot(state_indices, NUM_STATES[appliance])
-        class_weights[appliance] = compute_class_weights(state_indices, NUM_STATES[appliance])
+        train_states = power_array_to_states(appliance_power[appliance][:train_size], appliance)
+        test_states = power_array_to_states(appliance_power[appliance][train_size:], appliance)
+        
+        train_indices = encode_states(train_states, appliance)
+        test_indices = encode_states(test_states, appliance)
+        
+        y_states_train[appliance] = states_to_onehot(train_indices, NUM_STATES[appliance])
+        y_states_test[appliance] = states_to_onehot(test_indices, NUM_STATES[appliance])
+        
+        # Compute class weights from training data only
+        class_weights[appliance] = compute_class_weights(train_indices, NUM_STATES[appliance])
     
-    # Create S2P windows
-    X, _ = create_s2p_windows(features, y_power)
+    # Create S2P windows for train and test separately
+    X_train, _ = create_s2p_windows(features_train, y_power_train)
+    X_test, _ = create_s2p_windows(features_test, y_power_test)
     
     # Ensure no NaN values
-    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-    y_power = np.nan_to_num(y_power, nan=0.0, posinf=0.0, neginf=0.0)
-    
-    # Split indices (keeping temporal order)
-    train_size = int(0.8 * n_samples)
-    
-    X_train = X[:train_size]
-    X_test = X[train_size:]
+    X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
+    X_test = np.nan_to_num(X_test, nan=0.0, posinf=0.0, neginf=0.0)
+    y_power_train = np.nan_to_num(y_power_train, nan=0.0, posinf=0.0, neginf=0.0)
+    y_power_test = np.nan_to_num(y_power_test, nan=0.0, posinf=0.0, neginf=0.0)
     
     # Prepare output dictionary for training
     y_train = {}
     y_test = {}
     
     for i, appliance in enumerate(APPLIANCES):
-        y_train[f'{appliance}_power'] = y_power[:train_size, i:i+1]
-        y_test[f'{appliance}_power'] = y_power[train_size:, i:i+1]
-        y_train[f'{appliance}_state'] = y_states[appliance][:train_size]
-        y_test[f'{appliance}_state'] = y_states[appliance][train_size:]
+        y_train[f'{appliance}_power'] = y_power_train[:, i:i+1]
+        y_test[f'{appliance}_power'] = y_power_test[:, i:i+1]
+        y_train[f'{appliance}_state'] = y_states_train[appliance]
+        y_test[f'{appliance}_state'] = y_states_test[appliance]
     
     return X_train, X_test, y_train, y_test, class_weights, feature_engineer, power_scalers
 
@@ -927,7 +960,23 @@ def train_and_evaluate(data_path, output_dir='results'):
 # =============================================================================
 
 def generate_synthetic_data(n_samples=10000):
-    """Generate synthetic NILM data for testing."""
+    """
+    Generate synthetic NILM data for testing.
+    
+    Creates realistic power consumption patterns for 5 appliances:
+    - Air Conditioner: Thermostat-controlled ON/OFF cycles
+    - Refrigerator: Compressor cycles
+    - Fan: Multi-speed operation
+    - Washing Machine: Wash/Rinse/Spin phases
+    - EV Charger: Long charging sessions
+    
+    Args:
+        n_samples: Number of time samples to generate
+        
+    Returns:
+        mains_power: Total aggregate power consumption
+        appliance_power: Dict of individual appliance power traces
+    """
     
     print("Generating synthetic NILM data for demonstration...")
     
@@ -938,55 +987,92 @@ def generate_synthetic_data(n_samples=10000):
     appliance_power = {}
     
     # Air Conditioner: Cyclic pattern (ON/OFF thermostat)
-    ac_cycle = np.sin(2 * np.pi * t / 500) > 0.3
-    appliance_power['Air_Conditioner'] = ac_cycle.astype(float) * (1200 + np.random.randn(n_samples) * 50)
+    # Period of 500 samples simulates ~8 minute thermostat cycles
+    AC_CYCLE_PERIOD = 500
+    AC_POWER_WATTS = 1200
+    ac_cycle = np.sin(2 * np.pi * t / AC_CYCLE_PERIOD) > 0.3
+    appliance_power['Air_Conditioner'] = ac_cycle.astype(float) * (AC_POWER_WATTS + np.random.randn(n_samples) * 50)
     appliance_power['Air_Conditioner'] = np.maximum(0, appliance_power['Air_Conditioner'])
     
     # Refrigerator: Regular compressor cycles
-    ref_cycle = np.sin(2 * np.pi * t / 200) > 0.5
-    appliance_power['Refrigerator'] = ref_cycle.astype(float) * (150 + np.random.randn(n_samples) * 10)
+    # Period of 200 samples simulates ~3 minute compressor cycles
+    FRIDGE_CYCLE_PERIOD = 200
+    FRIDGE_POWER_WATTS = 150
+    ref_cycle = np.sin(2 * np.pi * t / FRIDGE_CYCLE_PERIOD) > 0.5
+    appliance_power['Refrigerator'] = ref_cycle.astype(float) * (FRIDGE_POWER_WATTS + np.random.randn(n_samples) * 10)
     appliance_power['Refrigerator'] = np.maximum(0, appliance_power['Refrigerator'])
     
     # Fan: Variable speed (multi-mode)
-    fan_mode = np.random.choice([0, 1, 2, 3], n_samples, p=[0.5, 0.2, 0.2, 0.1])
-    fan_power_levels = [0, 25, 40, 60]  # OFF, Low, Medium, High
-    appliance_power['Fan'] = np.array([fan_power_levels[m] for m in fan_mode]) + np.random.randn(n_samples) * 3
+    # Mode probabilities: 50% OFF, 20% Low, 20% Medium, 10% High
+    FAN_MODE_PROBS = [0.5, 0.2, 0.2, 0.1]
+    FAN_POWER_LEVELS = [0, 25, 40, 60]  # Watts for OFF, Low, Medium, High
+    fan_mode = np.random.choice([0, 1, 2, 3], n_samples, p=FAN_MODE_PROBS)
+    appliance_power['Fan'] = np.array([FAN_POWER_LEVELS[m] for m in fan_mode]) + np.random.randn(n_samples) * 3
     appliance_power['Fan'] = np.maximum(0, appliance_power['Fan'])
     
     # Washing Machine: Long cycles with different phases
+    # Cycle structure: 300 samples Wash, 200 samples Rinse, 200 samples Spin
+    WM_WASH_DURATION = 300
+    WM_RINSE_DURATION = 200  # End at sample 500
+    WM_SPIN_DURATION = 200   # End at sample 700
+    WM_WASH_POWER = 100      # Watts
+    WM_RINSE_POWER = 300
+    WM_SPIN_POWER = 500
+    WM_CYCLE_GAP = 1500      # Samples between cycle starts
+    
     wm_cycle = np.zeros(n_samples)
     cycle_start = 0
     while cycle_start < n_samples - 1000:
-        if np.random.random() > 0.8:
-            # Start a washing cycle
-            wm_cycle[cycle_start:cycle_start+300] = 100  # Wash
-            wm_cycle[cycle_start+300:cycle_start+500] = 300  # Rinse
-            wm_cycle[cycle_start+500:cycle_start+700] = 500  # Spin
-        cycle_start += 1500
+        if np.random.random() > 0.8:  # 20% chance to start a cycle
+            # Wash phase
+            wm_cycle[cycle_start:cycle_start+WM_WASH_DURATION] = WM_WASH_POWER
+            # Rinse phase
+            wm_cycle[cycle_start+WM_WASH_DURATION:cycle_start+WM_WASH_DURATION+WM_RINSE_DURATION] = WM_RINSE_POWER
+            # Spin phase
+            wm_cycle[cycle_start+WM_WASH_DURATION+WM_RINSE_DURATION:cycle_start+WM_WASH_DURATION+WM_RINSE_DURATION+WM_SPIN_DURATION] = WM_SPIN_POWER
+        cycle_start += WM_CYCLE_GAP
     appliance_power['Washing_Machine'] = wm_cycle + np.random.randn(n_samples) * 10
     appliance_power['Washing_Machine'] = np.maximum(0, appliance_power['Washing_Machine'])
     
     # EV Charger: Long charging sessions
+    # Typical EV chargers run for 1-2 hours at high power
+    EV_POWER_WATTS = 3000
+    EV_MIN_DURATION = 1000
+    EV_MAX_DURATION = 2000
+    EV_CYCLE_GAP = 3000  # Gap between potential charging sessions
+    
     ev_cycle = np.zeros(n_samples)
     charge_start = 0
-    while charge_start < n_samples - 2000:
-        if np.random.random() > 0.9:
-            duration = np.random.randint(1000, 2000)
-            ev_cycle[charge_start:charge_start+duration] = 3000
-        charge_start += 3000
+    while charge_start < n_samples - EV_MAX_DURATION:
+        if np.random.random() > 0.9:  # 10% chance to start charging
+            duration = np.random.randint(EV_MIN_DURATION, EV_MAX_DURATION)
+            ev_cycle[charge_start:charge_start+duration] = EV_POWER_WATTS
+        charge_start += EV_CYCLE_GAP
     appliance_power['EV_Charger'] = ev_cycle + np.random.randn(n_samples) * 20
     appliance_power['EV_Charger'] = np.maximum(0, appliance_power['EV_Charger'])
     
     # Total mains power (sum of all appliances + baseline + noise)
-    baseline = 200  # Base load
-    mains_power = baseline + sum(appliance_power.values()) + np.random.randn(n_samples) * 50
+    BASELINE_POWER = 200  # Base load from other devices
+    MAINS_NOISE_STD = 50  # Measurement noise standard deviation
+    all_appliance_power = np.sum(list(appliance_power.values()), axis=0)
+    mains_power = BASELINE_POWER + all_appliance_power + np.random.randn(n_samples) * MAINS_NOISE_STD
     mains_power = np.maximum(0, mains_power)
     
     return mains_power, appliance_power
 
 
 def run_demo():
-    """Run a demonstration with synthetic data."""
+    """
+    Run a demonstration with synthetic data.
+    
+    This function generates synthetic NILM data, trains the model for 10 epochs,
+    evaluates performance, and generates visualizations.
+    
+    Returns:
+        model: Trained Keras model
+        performance_summary: Dict of performance metrics for each appliance
+        history: Training history object
+    """
     
     print("=" * 70)
     print("NILM S2P Model Demonstration")
@@ -1049,7 +1135,7 @@ def run_demo():
     
     print(f"\nDemo results saved to {demo_dir}/")
     
-    return model, performance_summary
+    return model, performance_summary, history
 
 
 # =============================================================================
