@@ -83,7 +83,7 @@ Thumbs.db
 # Project specific
 checkpoints/
 logs/
-data/
+/data/
 *.pt
 *.pth
 *.ckpt
