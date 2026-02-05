@@ -63,9 +63,17 @@ def build_unet_model(
     # Block 4
     up1 = layers.UpSampling1D(2)(bottleneck)
     up1 = layers.Conv1D(base_filters * 4, 2, padding='same', activation='relu')(up1)
-    # Adjust shapes for concatenation
-    if up1.shape[1] != conv3.shape[1]:
-        up1 = layers.Cropping1D(cropping=(0, up1.shape[1] - conv3.shape[1]))(up1)
+    # Adjust shapes for concatenation using Lambda layer
+    def adjust_shape(tensors):
+        import tensorflow as tf
+        x, target = tensors
+        if x.shape[1] > target.shape[1]:
+            x = x[:, :target.shape[1], :]
+        elif x.shape[1] < target.shape[1]:
+            x = tf.pad(x, [[0, 0], [0, target.shape[1] - x.shape[1]], [0, 0]])
+        return x
+    
+    up1 = layers.Lambda(adjust_shape)([up1, conv3])
     merge1 = layers.Concatenate()([conv3, up1])
     conv4 = layers.Conv1D(base_filters * 4, 3, padding='same', activation='relu')(merge1)
     conv4 = layers.BatchNormalization()(conv4)
@@ -76,8 +84,7 @@ def build_unet_model(
     # Block 5
     up2 = layers.UpSampling1D(2)(conv4)
     up2 = layers.Conv1D(base_filters * 2, 2, padding='same', activation='relu')(up2)
-    if up2.shape[1] != conv2.shape[1]:
-        up2 = layers.Cropping1D(cropping=(0, up2.shape[1] - conv2.shape[1]))(up2)
+    up2 = layers.Lambda(adjust_shape)([up2, conv2])
     merge2 = layers.Concatenate()([conv2, up2])
     conv5 = layers.Conv1D(base_filters * 2, 3, padding='same', activation='relu')(merge2)
     conv5 = layers.BatchNormalization()(conv5)
@@ -88,8 +95,7 @@ def build_unet_model(
     # Block 6
     up3 = layers.UpSampling1D(2)(conv5)
     up3 = layers.Conv1D(base_filters, 2, padding='same', activation='relu')(up3)
-    if up3.shape[1] != conv1.shape[1]:
-        up3 = layers.Cropping1D(cropping=(0, up3.shape[1] - conv1.shape[1]))(up3)
+    up3 = layers.Lambda(adjust_shape)([up3, conv1])
     merge3 = layers.Concatenate()([conv1, up3])
     conv6 = layers.Conv1D(base_filters, 3, padding='same', activation='relu')(merge3)
     conv6 = layers.BatchNormalization()(conv6)
