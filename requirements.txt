@@ -1,0 +1,9 @@
+numpy>=1.21.0
+pandas>=1.3.0
+tensorflow>=2.8.0
+scikit-learn>=0.24.0
+matplotlib>=3.4.0
+h5py>=3.0.0
+nilmtk>=0.4.0
+pyyaml>=5.4.0
+tqdm>=4.62.0
