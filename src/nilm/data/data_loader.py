@@ -75,7 +75,7 @@ class DataLoader:
         aggregate_df = pd.read_csv(aggregate_path)
         aggregate_df[timestamp_col] = pd.to_datetime(aggregate_df[timestamp_col])
         aggregate_df.set_index(timestamp_col, inplace=True)
-        aggregate = aggregate_df[power_col].resample(resample).mean().fillna(method="ffill")
+        aggregate = aggregate_df[power_col].resample(resample).mean().ffill()
         
         # Load appliances
         appliance_data = {}
@@ -84,7 +84,7 @@ class DataLoader:
                 app_df = pd.read_csv(path)
                 app_df[timestamp_col] = pd.to_datetime(app_df[timestamp_col])
                 app_df.set_index(timestamp_col, inplace=True)
-                appliance_data[appliance] = app_df[power_col].resample(resample).mean().fillna(method="ffill")
+                appliance_data[appliance] = app_df[power_col].resample(resample).mean().ffill()
         
         return aggregate, appliance_data
     
