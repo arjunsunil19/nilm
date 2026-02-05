@@ -42,8 +42,8 @@ output/
 *.hdf5
 *.keras
 
-# Data files (large)
-data/
+# Data files (large) - only root level data folder
+/data/
 *.csv
 !examples/*.csv
 
