@@ -50,11 +50,11 @@ def handle_missing_values(df: pd.DataFrame, method: str = 'both') -> pd.DataFram
     df_filled = df.copy()
     
     if method == 'forward':
-        df_filled = df_filled.fillna(method='ffill')
+        df_filled = df_filled.ffill()
     elif method == 'backward':
-        df_filled = df_filled.fillna(method='bfill')
+        df_filled = df_filled.bfill()
     elif method == 'both':
-        df_filled = df_filled.fillna(method='ffill').fillna(method='bfill')
+        df_filled = df_filled.ffill().bfill()
     else:
         raise ValueError(f"Invalid fill method: {method}")
     
