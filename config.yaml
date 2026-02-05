@@ -1,0 +1,43 @@
+# NILM Training Configuration
+
+# Data settings
+data:
+  path: null  # Path to HDF5 or data directory
+  building: 1  # Building number for NILMTK datasets
+  sample_period: 6  # Sampling period in seconds
+  appliances:
+    - kettle
+    - microwave
+    - fridge
+    - dishwasher
+    - washing_machine
+
+# Model settings
+window_size: 599
+learning_rate: 0.0001
+
+# Architecture-specific settings
+model:
+  # BiLSTM settings
+  lstm_units: [128, 64]
+  use_conv: true
+  conv_filters: 32
+  dropout_rate: 0.2
+  
+  # CNN settings
+  # conv_layers: [[30, 10], [30, 8], [40, 6], [50, 5], [50, 5]]
+  # dense_units: [1024, 512]
+
+# Training settings
+training:
+  epochs: 100
+  batch_size: 64
+  early_stopping_patience: 10
+  reduce_lr_patience: 5
+  validation_split: 0.15
+
+# Output settings
+checkpoint_dir: ./checkpoints
+log_dir: ./logs
+output_dir: ./output
+verbose: 1
